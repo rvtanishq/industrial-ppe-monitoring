@@ -1,0 +1,14 @@
+path: C:/Users/Tanishq R V/OneDrive/Desktop/industrial_ppe_monitoring/datasets/construction-ppe
+
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: helmet
+  1: vest
+  2: person
+  3: no_helmet
+  4: no_vest
+  5: gloves
+  6: no_gloves
