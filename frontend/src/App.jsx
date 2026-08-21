@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -12,6 +12,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+
 import "./App.css";
 
 const API_BASE_URL = "http://127.0.0.1:8000";
@@ -31,6 +32,13 @@ const VIOLATION_TYPES = [
   "no_boots",
 ];
 
+const VIOLATION_COLORS = [
+  "#ef4444",
+  "#f97316",
+  "#eab308",
+  "#8b5cf6",
+];
+
 function App() {
   // ============================================================
   // STATE
@@ -40,14 +48,22 @@ function App() {
   const [records, setRecords] = useState([]);
 
   const [loading, setLoading] = useState(true);
-  const [backendOnline, setBackendOnline] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [backendOnline, setBackendOnline] =
+    useState(false);
 
   const [error, setError] = useState("");
+  const [cameraError, setCameraError] =
+    useState("");
 
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraError, setCameraError] = useState("");
+  const [cameraActive, setCameraActive] =
+    useState(false);
 
   const [monitoringStatus, setMonitoringStatus] =
+    useState(null);
+
+  const [lastRefresh, setLastRefresh] =
     useState(null);
 
   // ============================================================
@@ -59,217 +75,28 @@ function App() {
 
   const streamRef = useRef(null);
   const websocketRef = useRef(null);
-
   const frameIntervalRef = useRef(null);
 
   // ============================================================
-  // FETCH DASHBOARD DATA
+  // ALARM REFERENCES
   // ============================================================
 
-  const fetchDashboardData = async () => {
-    try {
-      setError("");
+  const alarmContextRef = useRef(null);
+  const alarmOscillatorRef = useRef(null);
+  const alarmGainRef = useRef(null);
+  const alarmIntervalRef = useRef(null);
 
-      const [
-        statusResponse,
-        dashboardResponse,
-        violationsResponse,
-      ] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/status`),
-        fetch(`${API_BASE_URL}/api/dashboard`),
-        fetch(`${API_BASE_URL}/api/violations`),
-      ]);
+  // ============================================================
+  // HELPERS
+  // ============================================================
 
-      if (!statusResponse.ok) {
-        throw new Error("Failed to fetch status");
-      }
+  const toNumber = (value, fallback = 0) => {
+    const number = Number(value);
 
-      if (!dashboardResponse.ok) {
-        throw new Error("Failed to fetch dashboard");
-      }
-
-      if (!violationsResponse.ok) {
-        throw new Error("Failed to fetch violations");
-      }
-
-      const statusData =
-        await statusResponse.json();
-
-      const dashboardData =
-        await dashboardResponse.json();
-
-      const violationsData =
-        await violationsResponse.json();
-
-      setMonitoringStatus(statusData);
-
-      /*
-       * Backend /api/dashboard structure:
-       *
-       * {
-       *   live: {...},
-       *   history: {...}
-       * }
-       */
-
-      const liveData =
-        dashboardData?.live || statusData || {};
-
-      const historyData =
-        dashboardData?.history || {};
-
-      const combinedStats = {
-        ...liveData,
-
-        total_violations:
-          historyData.total_violations ?? 0,
-
-        workers_involved:
-          historyData.workers_involved ?? 0,
-
-        total_detections:
-          liveData.workers ?? 0,
-      };
-
-      setStats(combinedStats);
-
-      if (
-        Array.isArray(
-          violationsData?.violations
-        )
-      ) {
-        setRecords(
-          violationsData.violations
-        );
-      } else {
-        setRecords([]);
-      }
-
-      setBackendOnline(true);
-
-    } catch (err) {
-      console.error(
-        "Dashboard error:",
-        err
-      );
-
-      setBackendOnline(false);
-
-      setError(
-        "Unable to connect to the backend. Make sure FastAPI is running on port 8000."
-      );
-    } finally {
-      setLoading(false);
-    }
+    return Number.isFinite(number)
+      ? number
+      : fallback;
   };
-
-  // ============================================================
-  // INITIAL LOAD + AUTO REFRESH
-  // ============================================================
-
-  useEffect(() => {
-    fetchDashboardData();
-
-    const interval =
-      setInterval(() => {
-        fetchDashboardData();
-      }, 5000);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, []);
-
-  // ============================================================
-  // PPE CHART
-  // ============================================================
-
-  const ppeChartData = useMemo(() => {
-    return PPE_TYPES.map((type) => ({
-      name: type.toUpperCase(),
-
-      count: Number(
-        stats?.[type] ??
-          stats?.detections?.[type] ??
-          stats?.ppe_counts?.[type] ??
-          0
-      ),
-    }));
-  }, [stats]);
-
-  // ============================================================
-  // VIOLATION CHART
-  // ============================================================
-
-  const violationChartData = useMemo(() => {
-    return VIOLATION_TYPES.map((type) => ({
-      name: type
-        .replace("no_", "")
-        .toUpperCase(),
-
-      count: Number(
-        stats?.[type] ??
-          stats?.violations?.[type] ??
-          stats?.violation_counts?.[type] ??
-          0
-      ),
-    }));
-  }, [stats]);
-
-  // ============================================================
-  // TOTAL DETECTIONS
-  // ============================================================
-
-  const totalDetections = Number(
-    stats?.total_detections ??
-      stats?.total_records ??
-      stats?.total ??
-      stats?.workers ??
-      0
-  );
-
-  // ============================================================
-  // TOTAL VIOLATIONS
-  // ============================================================
-
-  const totalViolations = Number(
-    stats?.total_violations ??
-      stats?.violations_total ??
-      0
-  );
-
-  // ============================================================
-  // COMPLIANCE
-  // ============================================================
-
-  const complianceRate =
-    totalDetections > 0
-      ? Math.max(
-          0,
-          Math.min(
-            100,
-            ((totalDetections -
-              totalViolations) /
-              totalDetections) *
-              100
-          )
-        )
-      : 0;
-
-  // ============================================================
-  // DOWNLOAD EXCEL
-  // ============================================================
-
-  const downloadExcel = () => {
-    window.open(
-      `${API_BASE_URL}/api/violations/download`,
-      "_blank"
-    );
-  };
-
-  // ============================================================
-  // GET RECORD VALUE
-  // ============================================================
 
   const getRecordValue = (
     record,
@@ -290,443 +117,1061 @@ function App() {
     return fallback;
   };
 
+  const normalizePPEText = (value) => {
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      return [];
+    }
+
+    if (Array.isArray(value)) {
+      return value
+        .flatMap((item) =>
+          normalizePPEText(item)
+        )
+        .filter(Boolean);
+    }
+
+    if (
+      typeof value === "object"
+    ) {
+      return Object.entries(value)
+        .filter(([, enabled]) =>
+          Boolean(enabled)
+        )
+        .map(([key]) => key);
+    }
+
+    return String(value)
+      .toLowerCase()
+      .replace(/[\[\]"']/g, "")
+      .split(/[,;|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  };
+
+  // ============================================================
+  // FETCH DASHBOARD DATA
+  // ============================================================
+
+  const fetchDashboardData =
+    useCallback(
+      async (manualRefresh = false) => {
+        try {
+          if (manualRefresh) {
+            setRefreshing(true);
+          }
+
+          setError("");
+
+          const [
+            statusResponse,
+            dashboardResponse,
+            violationsResponse,
+          ] = await Promise.all([
+            fetch(
+              `${API_BASE_URL}/api/status`,
+              {
+                cache: "no-store",
+              }
+            ),
+
+            fetch(
+              `${API_BASE_URL}/api/dashboard`,
+              {
+                cache: "no-store",
+              }
+            ),
+
+            fetch(
+              `${API_BASE_URL}/api/violations`,
+              {
+                cache: "no-store",
+              }
+            ),
+          ]);
+
+          if (!statusResponse.ok) {
+            throw new Error(
+              "Failed to fetch monitoring status."
+            );
+          }
+
+          if (!dashboardResponse.ok) {
+            throw new Error(
+              "Failed to fetch dashboard data."
+            );
+          }
+
+          if (!violationsResponse.ok) {
+            throw new Error(
+              "Failed to fetch violation records."
+            );
+          }
+
+          const statusData =
+            await statusResponse.json();
+
+          const dashboardData =
+            await dashboardResponse.json();
+
+          const violationsData =
+            await violationsResponse.json();
+
+          // ------------------------------------------------------
+          // LIVE STATUS
+          // ------------------------------------------------------
+
+          setMonitoringStatus(
+            statusData
+          );
+
+          // ------------------------------------------------------
+          // VIOLATION RECORDS
+          // ------------------------------------------------------
+
+          const violationRecords =
+            Array.isArray(
+              violationsData?.violations
+            )
+              ? violationsData.violations
+              : [];
+
+          setRecords(
+            violationRecords
+          );
+
+          // ------------------------------------------------------
+          // DASHBOARD DATA
+          // ------------------------------------------------------
+
+          const liveData =
+            dashboardData?.live ||
+            statusData ||
+            {};
+
+          const historyData =
+            dashboardData?.history ||
+            {};
+
+          const combinedStats = {
+            ...liveData,
+
+            total_violations:
+              historyData.total_violations ??
+              liveData.total_violations ??
+              statusData.total_violations ??
+              violationRecords.length ??
+              0,
+
+            workers_involved:
+              historyData.workers_involved ??
+              0,
+
+            total_detections:
+              liveData.workers ??
+              liveData.total_detections ??
+              0,
+          };
+
+          setStats(
+            combinedStats
+          );
+
+          setBackendOnline(true);
+
+          setLastRefresh(
+            new Date()
+          );
+        } catch (err) {
+          console.error(
+            "Dashboard error:",
+            err
+          );
+
+          setBackendOnline(false);
+
+          setError(
+            "Unable to connect to the backend. Make sure FastAPI is running on port 8000."
+          );
+        } finally {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      },
+      []
+    );
+
+  // ============================================================
+  // INITIAL LOAD + AUTO REFRESH
+  // ============================================================
+
+  useEffect(() => {
+    fetchDashboardData(false);
+
+    const interval =
+      setInterval(() => {
+        fetchDashboardData(false);
+      }, 3000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [fetchDashboardData]);
+
+  // ============================================================
+  // PPE BAR CHART
+  // ============================================================
+
+  const ppeChartData =
+    useMemo(() => {
+      return PPE_TYPES.map(
+        (type) => {
+          const count =
+            stats?.[type] ??
+            stats?.detections?.[type] ??
+            stats?.ppe_counts?.[type] ??
+            stats?.ppe?.[type] ??
+            0;
+
+          return {
+            name:
+              type.toUpperCase(),
+            count:
+              toNumber(count),
+          };
+        }
+      );
+    }, [stats]);
+
+  // ============================================================
+  // VIOLATION PIE CHART
+  // ============================================================
+
+  const violationChartData =
+    useMemo(() => {
+      const backendCounts =
+        stats?.violation_counts ||
+        stats?.violations ||
+        {};
+
+      const hasBackendDistribution =
+        VIOLATION_TYPES.some(
+          (type) =>
+            backendCounts?.[type] !==
+              undefined ||
+            stats?.[type] !==
+              undefined
+        );
+
+      // --------------------------------------------------------
+      // USE BACKEND DISTRIBUTION IF AVAILABLE
+      // --------------------------------------------------------
+
+      if (
+        hasBackendDistribution
+      ) {
+        return VIOLATION_TYPES.map(
+          (type) => ({
+            name: type
+              .replace("no_", "")
+              .toUpperCase(),
+
+            count: toNumber(
+              stats?.[type] ??
+                backendCounts?.[
+                  type
+                ] ??
+                0
+            ),
+
+            type,
+          })
+        );
+      }
+
+      // --------------------------------------------------------
+      // OTHERWISE DERIVE FROM DATABASE RECORDS
+      // --------------------------------------------------------
+
+      const counts = {
+        no_helmet: 0,
+        no_goggle: 0,
+        no_gloves: 0,
+        no_boots: 0,
+      };
+
+      records.forEach(
+        (record) => {
+          const missingPPE =
+            getRecordValue(
+              record,
+              [
+                "missing_ppe",
+                "Missing PPE",
+                "missing",
+                "violation",
+                "violations",
+              ],
+              ""
+            );
+
+          const items =
+            normalizePPEText(
+              missingPPE
+            );
+
+          items.forEach(
+            (item) => {
+              const clean =
+                item
+                  .toLowerCase()
+                  .replace(
+                    /\s+/g,
+                    "_"
+                  );
+
+              if (
+                clean.includes(
+                  "helmet"
+                )
+              ) {
+                counts.no_helmet++;
+              }
+
+              if (
+                clean.includes(
+                  "goggle"
+                )
+              ) {
+                counts.no_goggle++;
+              }
+
+              if (
+                clean.includes(
+                  "glove"
+                )
+              ) {
+                counts.no_gloves++;
+              }
+
+              if (
+                clean.includes(
+                  "boot"
+                )
+              ) {
+                counts.no_boots++;
+              }
+            }
+          );
+        }
+      );
+
+      return VIOLATION_TYPES.map(
+        (type) => ({
+          name: type
+            .replace("no_", "")
+            .toUpperCase(),
+
+          count:
+            counts[type],
+
+          type,
+        })
+      );
+    }, [stats, records]);
+
+  // ============================================================
+  // LIVE VALUES
+  // ============================================================
+
+  const currentWorkers =
+    toNumber(
+      monitoringStatus?.workers ??
+        stats?.workers ??
+        0
+    );
+
+  const currentCompliant =
+    toNumber(
+      monitoringStatus?.compliant ??
+        0
+    );
+
+  const currentViolating =
+    toNumber(
+      monitoringStatus?.violating ??
+        0
+    );
+
+  const currentMissingPPE =
+    toNumber(
+      monitoringStatus?.missing_ppe ??
+        0
+    );
+
+  // ============================================================
+  // HISTORICAL VALUES
+  // ============================================================
+
+  const totalDetections =
+    toNumber(
+      stats?.total_detections ??
+        stats?.total_records ??
+        stats?.total ??
+        stats?.workers ??
+        0
+    );
+
+  const totalViolations =
+    toNumber(
+      stats?.total_violations ??
+        stats?.violations_total ??
+        records.length ??
+        0
+    );
+
+  // ============================================================
+  // COMPLIANCE RATE
+  // ============================================================
+
+  const complianceRate =
+    totalDetections > 0
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            ((totalDetections -
+              totalViolations) /
+              totalDetections) *
+              100
+          )
+        )
+      : currentWorkers > 0
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            (currentCompliant /
+              currentWorkers) *
+              100
+          )
+        )
+      : 0;
+
+  // ============================================================
+  // CONTINUOUS ALARM
+  //
+  // ONLY CURRENT LIVE VIOLATIONS
+  // CONTROL THIS.
+  //
+  // Historical 940 violations DO NOT
+  // activate this alarm.
+  // ============================================================
+
+  const startContinuousAlarm =
+    useCallback(() => {
+      // Already running
+      if (
+        alarmOscillatorRef.current
+      ) {
+        return;
+      }
+
+      try {
+        const AudioContext =
+          window.AudioContext ||
+          window.webkitAudioContext;
+
+        if (!AudioContext) {
+          console.warn(
+            "Web Audio API is not supported."
+          );
+
+          return;
+        }
+
+        // Create audio context
+        if (
+          !alarmContextRef.current
+        ) {
+          alarmContextRef.current =
+            new AudioContext();
+        }
+
+        const audioContext =
+          alarmContextRef.current;
+
+        // Browser may suspend audio
+        if (
+          audioContext.state ===
+          "suspended"
+        ) {
+          audioContext.resume();
+        }
+
+        // ------------------------------------------------------
+        // OSCILLATOR
+        // ------------------------------------------------------
+
+        const oscillator =
+          audioContext.createOscillator();
+
+        // ------------------------------------------------------
+        // GAIN
+        // ------------------------------------------------------
+
+        const gain =
+          audioContext.createGain();
+
+        oscillator.type =
+          "square";
+
+        oscillator.frequency.value =
+          850;
+
+        // Start almost silent.
+        gain.gain.value =
+          0.0001;
+
+        oscillator.connect(
+          gain
+        );
+
+        gain.connect(
+          audioContext.destination
+        );
+
+        oscillator.start();
+
+        alarmOscillatorRef.current =
+          oscillator;
+
+        alarmGainRef.current =
+          gain;
+
+        // ------------------------------------------------------
+        // REPEATING BEEP
+        //
+        // Beep every 600ms.
+        // No multi-second gaps.
+        // ------------------------------------------------------
+
+        const beep = () => {
+          if (
+            !alarmGainRef.current ||
+            !alarmContextRef.current
+          ) {
+            return;
+          }
+
+          const now =
+            alarmContextRef.current
+              .currentTime;
+
+          const currentGain =
+            alarmGainRef.current;
+
+          currentGain.gain.cancelScheduledValues(
+            now
+          );
+
+          // Start beep
+          currentGain.gain.setValueAtTime(
+            0.0001,
+            now
+          );
+
+          currentGain.gain.linearRampToValueAtTime(
+            0.12,
+            now + 0.025
+          );
+
+          // Short beep
+          currentGain.gain.setValueAtTime(
+            0.12,
+            now + 0.18
+          );
+
+          // End beep
+          currentGain.gain.linearRampToValueAtTime(
+            0.0001,
+            now + 0.22
+          );
+        };
+
+        // First beep immediately
+        beep();
+
+        // Repeat rapidly
+        alarmIntervalRef.current =
+          setInterval(
+            beep,
+            600
+          );
+      } catch (error) {
+        console.error(
+          "Could not start alarm:",
+          error
+        );
+      }
+    }, []);
+
+  // ============================================================
+  // STOP ALARM
+  // ============================================================
+
+  const stopContinuousAlarm =
+    useCallback(() => {
+      // Stop beep interval
+      if (
+        alarmIntervalRef.current
+      ) {
+        clearInterval(
+          alarmIntervalRef.current
+        );
+
+        alarmIntervalRef.current =
+          null;
+      }
+
+      // Stop oscillator
+      if (
+        alarmOscillatorRef.current
+      ) {
+        try {
+          alarmOscillatorRef.current.stop();
+        } catch {}
+
+        try {
+          alarmOscillatorRef.current.disconnect();
+        } catch {}
+
+        alarmOscillatorRef.current =
+          null;
+      }
+
+      // Disconnect gain
+      if (
+        alarmGainRef.current
+      ) {
+        try {
+          alarmGainRef.current.disconnect();
+        } catch {}
+
+        alarmGainRef.current =
+          null;
+      }
+    }, []);
+
+  // ============================================================
+  // ALARM STATE CONTROLLER
+  //
+  // ONLY:
+  //
+  // cameraActive === true
+  // AND
+  // violating > 0
+  //
+  // means alarm.
+  // ============================================================
+
+  useEffect(() => {
+    const violating =
+      Number(
+        monitoringStatus?.violating ??
+          0
+      );
+
+    if (
+      cameraActive &&
+      violating > 0
+    ) {
+      startContinuousAlarm();
+    } else {
+      stopContinuousAlarm();
+    }
+
+    return () => {
+      stopContinuousAlarm();
+    };
+  }, [
+    cameraActive,
+    monitoringStatus?.violating,
+    startContinuousAlarm,
+    stopContinuousAlarm,
+  ]);
+
+  // ============================================================
+  // STOP ALARM ON PAGE REFRESH / CLOSE
+  // ============================================================
+
+  useEffect(() => {
+    const handleBeforeUnload =
+      () => {
+        stopContinuousAlarm();
+      };
+
+    window.addEventListener(
+      "beforeunload",
+      handleBeforeUnload
+    );
+
+    return () => {
+      window.removeEventListener(
+        "beforeunload",
+        handleBeforeUnload
+      );
+
+      stopContinuousAlarm();
+    };
+  }, [
+    stopContinuousAlarm,
+  ]);
+
+  // ============================================================
+  // DOWNLOAD EXCEL
+  // ============================================================
+
+  const downloadExcel =
+    () => {
+      window.open(
+        `${API_BASE_URL}/api/violations/download`,
+        "_blank"
+      );
+    };
+
   // ============================================================
   // START CAMERA
   // ============================================================
 
-  const startCamera = async () => {
-    try {
-      setCameraError("");
-
-      // --------------------------------------------------------
-      // CHECK BROWSER CAMERA SUPPORT
-      // --------------------------------------------------------
-
-      if (
-        !navigator.mediaDevices ||
-        !navigator.mediaDevices.getUserMedia
-      ) {
-        throw new Error(
-          "Your browser does not support camera access."
-        );
-      }
-
-      // --------------------------------------------------------
-      // REQUEST CAMERA
-      // --------------------------------------------------------
-
-      const stream =
-        await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: {
-              ideal: 1280,
-            },
-
-            height: {
-              ideal: 720,
-            },
-
-            facingMode: "user",
-          },
-
-          audio: false,
-        });
-
-      streamRef.current = stream;
-
-      // --------------------------------------------------------
-      // CONNECT VIDEO
-      // --------------------------------------------------------
-
-      const video =
-        videoRef.current;
-
-      if (!video) {
-        throw new Error(
-          "Camera video element not found."
-        );
-      }
-
-      video.srcObject = stream;
-
-      await video.play();
-
-      setCameraActive(true);
-
-      console.log(
-        "Browser camera started."
-      );
-
-      // --------------------------------------------------------
-      // START BACKEND MONITORING
-      // --------------------------------------------------------
-
+  const startCamera =
+    async () => {
       try {
-        const response =
-          await fetch(
-            `${API_BASE_URL}/api/monitoring/start`,
-            {
-              method: "POST",
-            }
-          );
+        setCameraError("");
 
-        if (!response.ok) {
+        // ------------------------------------------------------
+        // Request camera
+        // ------------------------------------------------------
+
+        if (
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices
+            .getUserMedia
+        ) {
           throw new Error(
-            "Failed to start backend monitoring."
+            "Your browser does not support camera access."
           );
         }
 
-        const data =
-          await response.json();
+        const stream =
+          await navigator.mediaDevices.getUserMedia(
+            {
+              video: {
+                width: {
+                  ideal: 1280,
+                },
 
-        console.log(
-          "Backend monitoring:",
-          data
+                height: {
+                  ideal: 720,
+                },
+
+                facingMode:
+                  "user",
+              },
+
+              audio: false,
+            }
+          );
+
+        streamRef.current =
+          stream;
+
+        const video =
+          videoRef.current;
+
+        if (!video) {
+          throw new Error(
+            "Camera video element not found."
+          );
+        }
+
+        video.srcObject =
+          stream;
+
+        await video.play();
+
+        setCameraActive(
+          true
         );
+
+        // ------------------------------------------------------
+        // START BACKEND MONITORING
+        // ------------------------------------------------------
+
+        try {
+          const response =
+            await fetch(
+              `${API_BASE_URL}/api/monitoring/start`,
+              {
+                method: "POST",
+              }
+            );
+
+          if (!response.ok) {
+            throw new Error(
+              "Failed to start backend monitoring."
+            );
+          }
+
+          const data =
+            await response.json();
+
+          if (
+            data?.status
+          ) {
+            setMonitoringStatus(
+              data.status
+            );
+          }
+        } catch (err) {
+          console.error(
+            "Backend monitoring error:",
+            err
+          );
+        }
+
+        // ------------------------------------------------------
+        // CONNECT WEBSOCKET
+        // ------------------------------------------------------
+
+        connectWebSocket();
       } catch (err) {
         console.error(
-          "Backend monitoring error:",
+          "Camera error:",
           err
         );
+
+        setCameraActive(
+          false
+        );
+
+        setCameraError(
+          err.message ||
+            "Unable to access the camera."
+        );
       }
-
-      // --------------------------------------------------------
-      // CONNECT WEBSOCKET
-      // --------------------------------------------------------
-
-      connectWebSocket();
-
-    } catch (err) {
-      console.error(
-        "Camera error:",
-        err
-      );
-
-      setCameraActive(false);
-
-      setCameraError(
-        err.message ||
-          "Unable to access the camera."
-      );
-    }
-  };
+    };
 
   // ============================================================
   // CONNECT WEBSOCKET
   // ============================================================
 
-  const connectWebSocket = () => {
-    // Close old socket first
-
-    if (
-      websocketRef.current
-    ) {
-      try {
-        websocketRef.current.close();
-      } catch (err) {
-        console.error(err);
+  const connectWebSocket =
+    () => {
+      if (
+        websocketRef.current
+      ) {
+        try {
+          websocketRef.current.close();
+        } catch {}
       }
-    }
 
-    const websocketUrl =
-      "ws://127.0.0.1:8000/ws/camera";
+      const websocket =
+        new WebSocket(
+          "ws://127.0.0.1:8000/ws/camera"
+        );
 
-    console.log(
-      "Connecting WebSocket:",
-      websocketUrl
-    );
+      websocketRef.current =
+        websocket;
 
-    const websocket =
-      new WebSocket(
-        websocketUrl
-      );
-
-    websocketRef.current =
-      websocket;
-
-    // ----------------------------------------------------------
-    // OPEN
-    // ----------------------------------------------------------
-
-    websocket.onopen = () => {
-      console.log(
-        "WebSocket connected."
-      );
-
-      websocket.send(
-        JSON.stringify({
-          type: "start",
-        })
-      );
-
-      startSendingFrames();
-    };
-
-    // ----------------------------------------------------------
-    // MESSAGE
-    // ----------------------------------------------------------
-
-    websocket.onmessage = (
-      event
-    ) => {
-      try {
-        const message =
-          JSON.parse(
-            event.data
+      websocket.onopen =
+        () => {
+          console.log(
+            "WebSocket connected."
           );
 
-        console.log(
-          "WebSocket message:",
-          message.type
+          websocket.send(
+            JSON.stringify({
+              type: "start",
+            })
+          );
+
+          startSendingFrames();
+        };
+
+      websocket.onmessage =
+        (event) => {
+          try {
+            const message =
+              JSON.parse(
+                event.data
+              );
+
+            // --------------------------------------------------
+            // STATUS
+            // --------------------------------------------------
+
+            if (
+              message.type ===
+              "status"
+            ) {
+              if (
+                message.status
+              ) {
+                setMonitoringStatus(
+                  message.status
+                );
+              }
+
+              return;
+            }
+
+            // --------------------------------------------------
+            // YOLO RESULT
+            // --------------------------------------------------
+
+            if (
+              message.type ===
+              "result"
+            ) {
+              if (
+                message.status
+              ) {
+                setMonitoringStatus(
+                  message.status
+                );
+              }
+
+              if (
+                message.image
+              ) {
+                displayProcessedFrame(
+                  message.image
+                );
+              }
+
+              return;
+            }
+          } catch (err) {
+            console.error(
+              "WebSocket message error:",
+              err
+            );
+          }
+        };
+
+      websocket.onerror =
+        (error) => {
+          console.error(
+            "WebSocket error:",
+            error
+          );
+        };
+
+      websocket.onclose =
+        () => {
+          console.log(
+            "WebSocket disconnected."
+          );
+
+          stopSendingFrames();
+        };
+    };
+
+  // ============================================================
+  // START SENDING FRAMES
+  // ============================================================
+
+  const startSendingFrames =
+    () => {
+      stopSendingFrames();
+
+      // 250ms = 4 FPS
+      //
+      // This is slightly lighter than
+      // sending 5 FPS continuously.
+      frameIntervalRef.current =
+        setInterval(
+          () => {
+            sendCurrentFrame();
+          },
+          250
+        );
+    };
+
+  // ============================================================
+  // STOP SENDING FRAMES
+  // ============================================================
+
+  const stopSendingFrames =
+    () => {
+      if (
+        frameIntervalRef.current
+      ) {
+        clearInterval(
+          frameIntervalRef.current
         );
 
-        // ------------------------------------------------------
-        // STATUS
-        // ------------------------------------------------------
-
-        if (
-          message.type ===
-          "status"
-        ) {
-          if (
-            message.status
-          ) {
-            setMonitoringStatus(
-              message.status
-            );
-          }
-
-          return;
-        }
-
-        // ------------------------------------------------------
-        // YOLO RESULT
-        // ------------------------------------------------------
-
-        if (
-          message.type ===
-          "result"
-        ) {
-          // Update status
-
-          if (
-            message.status
-          ) {
-            setMonitoringStatus(
-              message.status
-            );
-          }
-
-          // Draw processed YOLO frame
-
-          if (
-            message.image
-          ) {
-            displayProcessedFrame(
-              message.image
-            );
-          }
-
-          return;
-        }
-
-      } catch (err) {
-        console.error(
-          "WebSocket message parsing error:",
-          err
-        );
+        frameIntervalRef.current =
+          null;
       }
     };
 
-    // ----------------------------------------------------------
-    // ERROR
-    // ----------------------------------------------------------
-
-    websocket.onerror = (
-      error
-    ) => {
-      console.error(
-        "WebSocket error:",
-        error
-      );
-    };
-
-    // ----------------------------------------------------------
-    // CLOSE
-    // ----------------------------------------------------------
-
-    websocket.onclose = () => {
-      console.log(
-        "WebSocket disconnected."
-      );
-
-      stopSendingFrames();
-    };
-  };
-
   // ============================================================
-  // SEND CAMERA FRAMES
+  // SEND CURRENT FRAME
   // ============================================================
 
-  const startSendingFrames = () => {
-    stopSendingFrames();
+  const sendCurrentFrame =
+    () => {
+      const video =
+        videoRef.current;
 
-    frameIntervalRef.current =
-      setInterval(() => {
-        sendCurrentFrame();
-      }, 200);
-  };
+      const websocket =
+        websocketRef.current;
 
-  // ============================================================
-  // STOP FRAME SENDING
-  // ============================================================
+      if (!video) {
+        return;
+      }
 
-  const stopSendingFrames = () => {
-    if (
-      frameIntervalRef.current
-    ) {
-      clearInterval(
-        frameIntervalRef.current
-      );
+      if (!websocket) {
+        return;
+      }
 
-      frameIntervalRef.current =
-        null;
-    }
-  };
+      if (
+        websocket.readyState !==
+        WebSocket.OPEN
+      ) {
+        return;
+      }
 
-  // ============================================================
-  // CAPTURE CURRENT CAMERA FRAME
-  // ============================================================
+      if (
+        video.readyState < 2
+      ) {
+        return;
+      }
 
-  const sendCurrentFrame = () => {
-    const video =
-      videoRef.current;
+      if (
+        video.videoWidth === 0 ||
+        video.videoHeight === 0
+      ) {
+        return;
+      }
 
-    const websocket =
-      websocketRef.current;
+      const captureCanvas =
+        document.createElement(
+          "canvas"
+        );
 
-    if (!video) {
-      return;
-    }
+      captureCanvas.width =
+        video.videoWidth;
 
-    if (!websocket) {
-      return;
-    }
-
-    if (
-      websocket.readyState !==
-      WebSocket.OPEN
-    ) {
-      return;
-    }
-
-    if (
-      video.readyState <
-      2
-    ) {
-      return;
-    }
-
-    if (
-      video.videoWidth ===
-        0 ||
-      video.videoHeight ===
-        0
-    ) {
-      return;
-    }
-
-    // ----------------------------------------------------------
-    // TEMPORARY CAPTURE CANVAS
-    // ----------------------------------------------------------
-
-    const captureCanvas =
-      document.createElement(
-        "canvas"
-      );
-
-    captureCanvas.width =
-      video.videoWidth;
-
-    captureCanvas.height =
-      video.videoHeight;
-
-    const context =
-      captureCanvas.getContext(
-        "2d"
-      );
-
-    if (!context) {
-      return;
-    }
-
-    context.drawImage(
-      video,
-      0,
-      0,
-      captureCanvas.width,
-      captureCanvas.height
-    );
-
-    // ----------------------------------------------------------
-    // CONVERT TO JPEG
-    // ----------------------------------------------------------
-
-    const imageData =
-      captureCanvas.toDataURL(
-        "image/jpeg",
-        0.70
-      );
-
-    // ----------------------------------------------------------
-    // SEND TO FASTAPI
-    // ----------------------------------------------------------
-
-    try {
-      websocket.send(
-        JSON.stringify({
-          type: "frame",
-          image: imageData,
-        })
-      );
-    } catch (err) {
-      console.error(
-        "Frame sending error:",
-        err
-      );
-    }
-  };
-
-  // ============================================================
-  // DISPLAY YOLO PROCESSED FRAME
-  // ============================================================
-
-  const displayProcessedFrame = (
-    base64Image
-  ) => {
-    const canvas =
-      canvasRef.current;
-
-    if (!canvas) {
-      return;
-    }
-
-    const image =
-      new Image();
-
-    image.onload = () => {
-      // --------------------------------------------------------
-      // SET CANVAS TO ORIGINAL YOLO IMAGE SIZE
-      // --------------------------------------------------------
-
-      canvas.width =
-        image.width;
-
-      canvas.height =
-        image.height;
+      captureCanvas.height =
+        video.videoHeight;
 
       const context =
-        canvas.getContext(
+        captureCanvas.getContext(
           "2d"
         );
 
@@ -734,186 +1179,254 @@ function App() {
         return;
       }
 
-      // --------------------------------------------------------
-      // CLEAR OLD FRAME
-      // --------------------------------------------------------
-
-      context.clearRect(
-        0,
-        0,
-        canvas.width,
-        canvas.height
-      );
-
-      // --------------------------------------------------------
-      // DRAW YOLO FRAME
-      // --------------------------------------------------------
-
       context.drawImage(
-        image,
+        video,
         0,
         0,
-        canvas.width,
-        canvas.height
+        captureCanvas.width,
+        captureCanvas.height
       );
+
+      const imageData =
+        captureCanvas.toDataURL(
+          "image/jpeg",
+          0.65
+        );
+
+      try {
+        websocket.send(
+          JSON.stringify({
+            type: "frame",
+            image: imageData,
+          })
+        );
+      } catch (err) {
+        console.error(
+          "Frame sending error:",
+          err
+        );
+      }
     };
 
-    image.onerror = () => {
-      console.error(
-        "Could not load processed YOLO image."
-      );
-    };
+  // ============================================================
+  // DISPLAY YOLO FRAME
+  // ============================================================
 
-    image.src =
-      `data:image/jpeg;base64,${base64Image}`;
-  };
+  const displayProcessedFrame =
+    (base64Image) => {
+      const canvas =
+        canvasRef.current;
+
+      if (!canvas) {
+        return;
+      }
+
+      const image =
+        new Image();
+
+      image.onload =
+        () => {
+          canvas.width =
+            image.width;
+
+          canvas.height =
+            image.height;
+
+          const context =
+            canvas.getContext(
+              "2d"
+            );
+
+          if (!context) {
+            return;
+          }
+
+          context.clearRect(
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          );
+
+          context.drawImage(
+            image,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          );
+        };
+
+      image.onerror =
+        () => {
+          console.error(
+            "Could not load YOLO image."
+          );
+        };
+
+      image.src =
+        `data:image/jpeg;base64,${base64Image}`;
+    };
 
   // ============================================================
   // STOP CAMERA
   // ============================================================
 
-  const stopCamera = async () => {
-    console.log(
-      "Stopping camera..."
-    );
+  const stopCamera =
+    async () => {
+      console.log(
+        "Stopping camera..."
+      );
 
-    // ----------------------------------------------------------
-    // STOP FRAME LOOP
-    // ----------------------------------------------------------
+      // IMPORTANT:
+      // Stop browser alarm immediately.
+      stopContinuousAlarm();
 
-    stopSendingFrames();
+      // Stop frame loop
+      stopSendingFrames();
 
-    // ----------------------------------------------------------
-    // SEND STOP TO WEBSOCKET
-    // ----------------------------------------------------------
+      // --------------------------------------------------------
+      // Tell WebSocket to stop
+      // --------------------------------------------------------
 
-    if (
-      websocketRef.current &&
-      websocketRef.current.readyState ===
-        WebSocket.OPEN
-    ) {
-      try {
-        websocketRef.current.send(
-          JSON.stringify({
-            type: "stop",
-          })
-        );
-      } catch (err) {
-        console.error(
-          err
-        );
-      }
-    }
-
-    // ----------------------------------------------------------
-    // CLOSE WEBSOCKET
-    // ----------------------------------------------------------
-
-    if (
-      websocketRef.current
-    ) {
-      try {
-        websocketRef.current.close();
-      } catch (err) {
-        console.error(
-          err
-        );
+      if (
+        websocketRef.current &&
+        websocketRef.current
+          .readyState ===
+          WebSocket.OPEN
+      ) {
+        try {
+          websocketRef.current.send(
+            JSON.stringify({
+              type: "stop",
+            })
+          );
+        } catch {}
       }
 
-      websocketRef.current =
-        null;
-    }
+      // --------------------------------------------------------
+      // Close WebSocket
+      // --------------------------------------------------------
 
-    // ----------------------------------------------------------
-    // STOP CAMERA STREAM
-    // ----------------------------------------------------------
+      if (
+        websocketRef.current
+      ) {
+        try {
+          websocketRef.current.close();
+        } catch {}
 
-    if (
-      streamRef.current
-    ) {
-      streamRef.current
-        .getTracks()
-        .forEach(
-          (track) => {
-            track.stop();
+        websocketRef.current =
+          null;
+      }
+
+      // --------------------------------------------------------
+      // Stop camera tracks
+      // --------------------------------------------------------
+
+      if (
+        streamRef.current
+      ) {
+        streamRef.current
+          .getTracks()
+          .forEach(
+            (track) => {
+              track.stop();
+            }
+          );
+
+        streamRef.current =
+          null;
+      }
+
+      // --------------------------------------------------------
+      // Clear video
+      // --------------------------------------------------------
+
+      if (
+        videoRef.current
+      ) {
+        videoRef.current.srcObject =
+          null;
+      }
+
+      // --------------------------------------------------------
+      // Clear YOLO canvas
+      // --------------------------------------------------------
+
+      if (
+        canvasRef.current
+      ) {
+        const canvas =
+          canvasRef.current;
+
+        const context =
+          canvas.getContext(
+            "2d"
+          );
+
+        if (context) {
+          context.clearRect(
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          );
+        }
+      }
+
+      // --------------------------------------------------------
+      // Tell backend to stop
+      // --------------------------------------------------------
+
+      try {
+        await fetch(
+          `${API_BASE_URL}/api/monitoring/stop`,
+          {
+            method: "POST",
           }
         );
-
-      streamRef.current =
-        null;
-    }
-
-    // ----------------------------------------------------------
-    // CLEAR VIDEO
-    // ----------------------------------------------------------
-
-    if (
-      videoRef.current
-    ) {
-      videoRef.current.srcObject =
-        null;
-    }
-
-    // ----------------------------------------------------------
-    // CLEAR CANVAS
-    // ----------------------------------------------------------
-
-    if (
-      canvasRef.current
-    ) {
-      const canvas =
-        canvasRef.current;
-
-      const context =
-        canvas.getContext(
-          "2d"
-        );
-
-      if (context) {
-        context.clearRect(
-          0,
-          0,
-          canvas.width,
-          canvas.height
+      } catch (err) {
+        console.error(
+          "Backend stop error:",
+          err
         );
       }
-    }
 
-    // ----------------------------------------------------------
-    // BACKEND STOP
-    // ----------------------------------------------------------
+      // --------------------------------------------------------
+      // Reset frontend state
+      // --------------------------------------------------------
 
-    try {
-      await fetch(
-        `${API_BASE_URL}/api/monitoring/stop`,
-        {
-          method: "POST",
-        }
+      setCameraActive(
+        false
       );
-    } catch (err) {
-      console.error(
-        "Backend stop error:",
-        err
+
+      setMonitoringStatus(
+        (previous) => ({
+          ...(previous || {}),
+          monitoring: false,
+          alarm: false,
+          workers: 0,
+          compliant: 0,
+          violating: 0,
+          missing_ppe: 0,
+        })
       );
-    }
 
-    setCameraActive(
-      false
-    );
-
-    console.log(
-      "Camera stopped."
-    );
-
-    fetchDashboardData();
-  };
+      setTimeout(() => {
+        fetchDashboardData(
+          false
+        );
+      }, 300);
+    };
 
   // ============================================================
-  // CLEANUP WHEN COMPONENT UNMOUNTS
+  // COMPLETE CLEANUP
   // ============================================================
 
   useEffect(() => {
     return () => {
+      stopContinuousAlarm();
+
       stopSendingFrames();
 
       if (
@@ -921,7 +1434,7 @@ function App() {
       ) {
         try {
           websocketRef.current.close();
-        } catch (err) {}
+        } catch {}
       }
 
       if (
@@ -939,7 +1452,16 @@ function App() {
   }, []);
 
   // ============================================================
-  // RETURN UI
+  // LAST UPDATE
+  // ============================================================
+
+  const lastUpdateText =
+    lastRefresh
+      ? lastRefresh.toLocaleTimeString()
+      : "Waiting...";
+
+  // ============================================================
+  // RENDER
   // ============================================================
 
   return (
@@ -952,16 +1474,14 @@ function App() {
       <header className="topbar">
 
         <div>
-
           <h1>
-            Industrial PPE Monitoring
+            🛡 Industrial PPE Monitoring
           </h1>
 
           <p>
-            AI-powered Personal Protective
-            Equipment monitoring system
+            AI-powered workplace safety
+            intelligence
           </p>
-
         </div>
 
         <div className="connection-status">
@@ -972,7 +1492,7 @@ function App() {
                 ? "online"
                 : "offline"
             }`}
-          ></span>
+          />
 
           {backendOnline
             ? "Backend Online"
@@ -982,10 +1502,6 @@ function App() {
 
       </header>
 
-      {/* ======================================================
-          MAIN
-      ====================================================== */}
-
       <main className="dashboard">
 
         {/* ====================================================
@@ -994,29 +1510,19 @@ function App() {
 
         {error && (
           <div className="error-banner">
-
             <strong>
               Backend connection problem:
             </strong>{" "}
-
             {error}
-
           </div>
         )}
 
-        {/* ====================================================
-            CAMERA ERROR
-        ==================================================== */}
-
         {cameraError && (
           <div className="error-banner">
-
             <strong>
               Camera problem:
             </strong>{" "}
-
             {cameraError}
-
           </div>
         )}
 
@@ -1039,11 +1545,11 @@ function App() {
             </h2>
 
             <p>
-              Monitor PPE compliance,
-              identify safety violations,
-              and maintain a centralized
-              record of workplace safety
-              events.
+              Detect PPE compliance,
+              identify workplace safety
+              violations and monitor
+              workers in real time using
+              computer vision and YOLO.
             </p>
 
           </div>
@@ -1061,15 +1567,20 @@ function App() {
             <strong>
               {cameraActive
                 ? "ACTIVE"
-                : "OFFLINE"}
+                : "STANDBY"}
             </strong>
+
+            <span>
+              Last update:{" "}
+              {lastUpdateText}
+            </span>
 
           </div>
 
         </section>
 
         {/* ====================================================
-            CAMERA CONTROLS
+            CAMERA
         ==================================================== */}
 
         <section className="panel">
@@ -1083,40 +1594,34 @@ function App() {
               </h3>
 
               <p>
-                Real-time YOLO PPE detection
+                Real-time YOLO object detection
               </p>
 
             </div>
 
-            <div>
-
-              <strong
-                style={{
-                  color:
-                    cameraActive
-                      ? "#16a34a"
-                      : "#dc2626",
-                }}
-              >
-                {cameraActive
-                  ? "● LIVE"
-                  : "○ OFFLINE"}
-              </strong>
-
-            </div>
+            <strong
+              style={{
+                color:
+                  cameraActive
+                    ? "#22c55e"
+                    : "#ef4444",
+              }}
+            >
+              {cameraActive
+                ? "● LIVE"
+                : "○ OFFLINE"}
+            </strong>
 
           </div>
-
-          {/* ==================================================
-              CAMERA BUTTONS
-          ================================================== */}
 
           <div
             style={{
               display: "flex",
               gap: "12px",
-              marginBottom: "20px",
-              flexWrap: "wrap",
+              marginBottom:
+                "20px",
+              flexWrap:
+                "wrap",
             }}
           >
 
@@ -1127,9 +1632,6 @@ function App() {
                   ? stopCamera
                   : startCamera
               }
-              style={{
-                cursor: "pointer",
-              }}
             >
               {cameraActive
                 ? "■ Stop Monitoring"
@@ -1138,40 +1640,49 @@ function App() {
 
             <button
               className="refresh-button"
-              onClick={
-                fetchDashboardData
+              onClick={() =>
+                fetchDashboardData(
+                  true
+                )
+              }
+              disabled={
+                refreshing
               }
             >
-              ↻ Refresh
+              {refreshing
+                ? "⟳ Refreshing..."
+                : "↻ Refresh"}
             </button>
 
           </div>
 
-          {/* ==================================================
-              CAMERA DISPLAY
-          ================================================== */}
+          {/* CAMERA VIEW */}
 
           <div
             style={{
               width: "100%",
-              minHeight: "450px",
+              minHeight:
+                "450px",
               background:
-                "#111827",
-              borderRadius: "12px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
-              position: "relative",
+                "linear-gradient(145deg,#020617,#0f172a)",
+              borderRadius:
+                "18px",
+              display:
+                "flex",
+              alignItems:
+                "center",
+              justifyContent:
+                "center",
+              overflow:
+                "hidden",
+              position:
+                "relative",
+              border:
+                "1px solid rgba(56,189,248,.15)",
+              boxShadow:
+                "inset 0 0 50px rgba(0,0,0,.35)",
             }}
           >
-
-            {/* ================================================
-                ORIGINAL CAMERA
-
-                Hidden because it is only used as the
-                frame source for YOLO.
-            ================================================= */}
 
             <video
               ref={videoRef}
@@ -1181,23 +1692,13 @@ function App() {
               style={{
                 position:
                   "absolute",
-
                 width: "1px",
-
                 height: "1px",
-
                 opacity: 0,
-
                 pointerEvents:
                   "none",
               }}
             />
-
-            {/* ================================================
-                YOLO PROCESSED IMAGE
-
-                THIS IS WHERE THE BOUNDING BOXES APPEAR.
-            ================================================= */}
 
             <canvas
               ref={canvasRef}
@@ -1207,7 +1708,8 @@ function App() {
                     ? "block"
                     : "none",
 
-                width: "100%",
+                width:
+                  "100%",
 
                 maxHeight:
                   "650px",
@@ -1216,33 +1718,26 @@ function App() {
                   "contain",
 
                 borderRadius:
-                  "12px",
+                  "18px",
               }}
             />
-
-            {/* ================================================
-                OFFLINE MESSAGE
-            ================================================= */}
 
             {!cameraActive && (
               <div
                 style={{
                   color:
-                    "#9ca3af",
-
+                    "#64748b",
                   textAlign:
                     "center",
-
                   padding:
-                    "40px",
+                    "50px",
                 }}
               >
 
                 <div
                   style={{
                     fontSize:
-                      "50px",
-
+                      "64px",
                     marginBottom:
                       "15px",
                   }}
@@ -1250,13 +1745,20 @@ function App() {
                   📷
                 </div>
 
-                <h3>
+                <h3
+                  style={{
+                    color:
+                      "#e2e8f0",
+                  }}
+                >
                   Camera Offline
                 </h3>
 
                 <p>
-                  Click "Start Monitoring"
-                  to activate the camera.
+                  Start monitoring
+                  to activate
+                  real-time PPE
+                  detection.
                 </p>
 
               </div>
@@ -1273,14 +1775,14 @@ function App() {
         <section className="stats-grid">
 
           <StatCard
-            title="Total Detections"
+            title="Workers Detected"
             value={
               loading
                 ? "..."
-                : totalDetections
+                : currentWorkers
             }
-            description="Current detected workers"
-            icon="◉"
+            description="Current camera detection"
+            icon="👤"
           />
 
           <StatCard
@@ -1290,7 +1792,7 @@ function App() {
                 ? "..."
                 : totalViolations
             }
-            description="PPE violations recorded"
+            description="Violations recorded"
             icon="!"
             danger
           />
@@ -1310,14 +1812,15 @@ function App() {
           />
 
           <StatCard
-            title="Database Records"
+            title="Missing PPE"
             value={
               loading
                 ? "..."
-                : records.length
+                : currentMissingPPE
             }
-            description="Violation records available"
-            icon="▣"
+            description="Currently missing equipment"
+            icon="⚠"
+            danger
           />
 
         </section>
@@ -1337,114 +1840,76 @@ function App() {
               </h3>
 
               <p>
-                Current YOLO monitoring state
+                Current safety state
+                from YOLO
               </p>
 
             </div>
+
+            <span
+              className={`status-badge ${
+                cameraActive
+                  ? "safe"
+                  : "violation"
+              }`}
+            >
+              {cameraActive
+                ? "MONITORING"
+                : "STANDBY"}
+            </span>
 
           </div>
 
           <div className="ppe-grid">
 
-            <div className="ppe-card">
+            <StatusCard
+              icon="👤"
+              title="Workers"
+              value={
+                currentWorkers
+              }
+            />
 
-              <div className="ppe-card-icon">
-                👤
-              </div>
+            <StatusCard
+              icon="✓"
+              title="Compliant"
+              value={
+                currentCompliant
+              }
+            />
 
-              <div>
+            <StatusCard
+              icon="!"
+              title="Violating"
+              value={
+                currentViolating
+              }
+              danger
+            />
 
-                <span>
-                  Workers
-                </span>
+            <StatusCard
+              icon="⚠"
+              title="Missing PPE"
+              value={
+                currentMissingPPE
+              }
+              danger
+            />
 
-                <strong>
-                  {monitoringStatus?.workers ??
-                    0}
-                </strong>
-
-              </div>
-
-            </div>
-
-            <div className="ppe-card">
-
-              <div className="ppe-card-icon">
-                ✓
-              </div>
-
-              <div>
-
-                <span>
-                  Compliant
-                </span>
-
-                <strong>
-                  {monitoringStatus?.compliant ??
-                    0}
-                </strong>
-
-              </div>
-
-            </div>
-
-            <div className="ppe-card">
-
-              <div
-                className="ppe-card-icon"
-                style={{
-                  background:
-                    "#fee2e2",
-                  color:
-                    "#dc2626",
-                }}
-              >
-                !
-              </div>
-
-              <div>
-
-                <span>
-                  Violating
-                </span>
-
-                <strong>
-                  {monitoringStatus?.violating ??
-                    0}
-                </strong>
-
-              </div>
-
-            </div>
-
-            <div className="ppe-card">
-
-              <div
-                className="ppe-card-icon"
-                style={{
-                  background:
-                    "#fff7ed",
-                  color:
-                    "#ea580c",
-                }}
-              >
-                ⚠
-              </div>
-
-              <div>
-
-                <span>
-                  Missing PPE
-                </span>
-
-                <strong>
-                  {monitoringStatus?.missing_ppe ??
-                    0}
-                </strong>
-
-              </div>
-
-            </div>
+            <StatusCard
+              icon="🔊"
+              title="Alarm"
+              value={
+                monitoringStatus?.alarm
+                  ? "ACTIVE"
+                  : "OFF"
+              }
+              danger={
+                Boolean(
+                  monitoringStatus?.alarm
+                )
+              }
+            />
 
           </div>
 
@@ -1491,32 +1956,59 @@ function App() {
 
                   <CartesianGrid
                     strokeDasharray="3 3"
+                    stroke="rgba(148,163,184,.12)"
                   />
 
                   <XAxis
                     dataKey="name"
+                    tick={{
+                      fill:
+                        "#94a3b8",
+                      fontSize:
+                        10,
+                    }}
                   />
 
                   <YAxis
                     allowDecimals={
                       false
                     }
+                    tick={{
+                      fill:
+                        "#94a3b8",
+                      fontSize:
+                        10,
+                    }}
                   />
 
-                  <Tooltip />
+                  <Tooltip
+                    contentStyle={{
+                      background:
+                        "#0f172a",
+                      border:
+                        "1px solid rgba(56,189,248,.2)",
+                      borderRadius:
+                        "12px",
+                      color:
+                        "#f8fafc",
+                    }}
+                  />
 
                   <Legend />
 
                   <Bar
                     dataKey="count"
                     name="Detections"
-                    fill="#2563eb"
+                    fill="#38bdf8"
                     radius={[
-                      6,
-                      6,
-                      0,
-                      0,
+                      8,
+                      8,
+                      2,
+                      2,
                     ]}
+                    animationDuration={
+                      900
+                    }
                   />
 
                 </BarChart>
@@ -1540,10 +2032,25 @@ function App() {
                 </h3>
 
                 <p>
-                  Detected PPE violations
+                  PPE violations detected
                 </p>
 
               </div>
+
+              <span className="status-badge violation">
+
+                {violationChartData.reduce(
+                  (
+                    sum,
+                    item
+                  ) =>
+                    sum +
+                    item.count,
+                  0
+                )}{" "}
+                TOTAL
+
+              </span>
 
             </div>
 
@@ -1558,43 +2065,75 @@ function App() {
 
                   <Pie
                     data={
-                      violationChartData
+                      violationChartData.filter(
+                        (
+                          item
+                        ) =>
+                          item.count >
+                          0
+                      )
                     }
                     dataKey="count"
                     nameKey="name"
                     cx="50%"
                     cy="50%"
                     outerRadius={
-                      110
+                      105
+                    }
+                    innerRadius={
+                      58
+                    }
+                    paddingAngle={
+                      4
                     }
                     label
+                    animationDuration={
+                      1000
+                    }
                   >
 
-                    {violationChartData.map(
-                      (
-                        entry,
-                        index
-                      ) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={
-                            [
-                              "#ef4444",
-                              "#f97316",
-                              "#eab308",
-                              "#8b5cf6",
-                            ][
-                              index %
-                                4
-                            ]
-                          }
-                        />
+                    {violationChartData
+                      .filter(
+                        (
+                          item
+                        ) =>
+                          item.count >
+                          0
                       )
-                    )}
+                      .map(
+                        (
+                          entry,
+                          index
+                        ) => (
+                          <Cell
+                            key={
+                              entry.type
+                            }
+                            fill={
+                              VIOLATION_COLORS[
+                                index %
+                                  VIOLATION_COLORS.length
+                              ]
+                            }
+                            stroke="transparent"
+                          />
+                        )
+                      )}
 
                   </Pie>
 
-                  <Tooltip />
+                  <Tooltip
+                    contentStyle={{
+                      background:
+                        "#0f172a",
+                      border:
+                        "1px solid rgba(56,189,248,.2)",
+                      borderRadius:
+                        "12px",
+                      color:
+                        "#f8fafc",
+                    }}
+                  />
 
                   <Legend />
 
@@ -1603,6 +2142,29 @@ function App() {
               </ResponsiveContainer>
 
             </div>
+
+            {violationChartData.every(
+              (item) =>
+                item.count ===
+                0
+            ) && (
+              <div
+                style={{
+                  textAlign:
+                    "center",
+                  color:
+                    "#64748b",
+                  fontSize:
+                    "12px",
+                  marginTop:
+                    "-35px",
+                }}
+              >
+                No violation
+                distribution
+                available yet.
+              </div>
+            )}
 
           </div>
 
@@ -1636,7 +2198,9 @@ function App() {
               (item) => (
                 <div
                   className="ppe-card"
-                  key={item.name}
+                  key={
+                    item.name
+                  }
                 >
 
                   <div className="ppe-card-icon">
@@ -1664,6 +2228,95 @@ function App() {
         </section>
 
         {/* ====================================================
+            VIOLATION BREAKDOWN
+        ==================================================== */}
+
+        <section className="panel">
+
+          <div className="panel-header">
+
+            <div>
+
+              <h3>
+                Safety Violation Breakdown
+              </h3>
+
+              <p>
+                Individual PPE violation
+                counts
+              </p>
+
+            </div>
+
+          </div>
+
+          <div className="ppe-grid">
+
+            {violationChartData.map(
+              (
+                item
+              ) => (
+                <div
+                  className="ppe-card"
+                  key={
+                    item.type
+                  }
+                  style={{
+                    borderColor:
+                      item.count >
+                      0
+                        ? "rgba(239,68,68,.25)"
+                        : undefined,
+                  }}
+                >
+
+                  <div
+                    className="ppe-card-icon"
+                    style={{
+                      background:
+                        item.count >
+                        0
+                          ? "rgba(239,68,68,.12)"
+                          : undefined,
+
+                      color:
+                        item.count >
+                        0
+                          ? "#f87171"
+                          : undefined,
+                    }}
+                  >
+                    {item.count >
+                    0
+                      ? "!"
+                      : "✓"}
+                  </div>
+
+                  <div>
+
+                    <span>
+                      {
+                        item.name
+                      }
+                    </span>
+
+                    <strong>
+                      {
+                        item.count
+                      }
+                    </strong>
+
+                  </div>
+
+                </div>
+              )
+            )}
+
+          </div>
+
+        </section>
+
+        {/* ====================================================
             RECORDS
         ==================================================== */}
 
@@ -1678,8 +2331,8 @@ function App() {
               </h3>
 
               <p>
-                Latest PPE violations stored
-                in the database
+                Latest PPE violations
+                stored in database
               </p>
 
             </div>
@@ -1688,11 +2341,18 @@ function App() {
 
               <button
                 className="refresh-button"
-                onClick={
-                  fetchDashboardData
+                onClick={() =>
+                  fetchDashboardData(
+                    true
+                  )
+                }
+                disabled={
+                  refreshing
                 }
               >
-                ↻ Refresh
+                {refreshing
+                  ? "⟳ Refreshing..."
+                  : "↻ Refresh"}
               </button>
 
               <button
@@ -1715,7 +2375,6 @@ function App() {
               <thead>
 
                 <tr>
-
                   <th>
                     ID
                   </th>
@@ -1735,7 +2394,6 @@ function App() {
                   <th>
                     Status
                   </th>
-
                 </tr>
 
               </thead>
@@ -1744,21 +2402,19 @@ function App() {
 
                 {records.length ===
                 0 ? (
-
                   <tr>
 
                     <td
                       colSpan="5"
                       className="empty-state"
                     >
-                      No monitoring records
+                      No monitoring
+                      records
                       available.
                     </td>
 
                   </tr>
-
                 ) : (
-
                   records
                     .slice(
                       0,
@@ -1769,7 +2425,6 @@ function App() {
                         record,
                         index
                       ) => {
-
                         const id =
                           getRecordValue(
                             record,
@@ -1824,14 +2479,15 @@ function App() {
                             .toLowerCase()
                             .includes(
                               "violation"
-                            );
+                            ) ||
+                          normalizePPEText(
+                            missingPPE
+                          ).length >
+                            0;
 
                         return (
                           <tr
-                            key={
-                              id ??
-                              index
-                            }
+                            key={`${id}-${index}`}
                           >
 
                             <td>
@@ -1839,24 +2495,26 @@ function App() {
                             </td>
 
                             <td>
-                              {timestamp}
+                              {
+                                timestamp
+                              }
                             </td>
 
                             <td>
-                              {personId}
+                              {
+                                personId
+                              }
                             </td>
 
                             <td>
 
                               <span className="detection-label">
-
                                 {String(
                                   missingPPE
                                 ).replaceAll(
                                   "_",
                                   " "
                                 )}
-
                               </span>
 
                             </td>
@@ -1881,7 +2539,6 @@ function App() {
                         );
                       }
                     )
-
                 )}
 
               </tbody>
@@ -1899,7 +2556,6 @@ function App() {
         <section className="system-info">
 
           <div>
-
             <span>
               AI MODEL
             </span>
@@ -1907,11 +2563,9 @@ function App() {
             <strong>
               YOLO PPE Detection
             </strong>
-
           </div>
 
           <div>
-
             <span>
               BACKEND
             </span>
@@ -1919,11 +2573,9 @@ function App() {
             <strong>
               FastAPI
             </strong>
-
           </div>
 
           <div>
-
             <span>
               DATABASE
             </span>
@@ -1931,11 +2583,9 @@ function App() {
             <strong>
               SQLite
             </strong>
-
           </div>
 
           <div>
-
             <span>
               FRONTEND
             </span>
@@ -1943,22 +2593,16 @@ function App() {
             <strong>
               React + Vite
             </strong>
-
           </div>
 
         </section>
 
       </main>
 
-      {/* ======================================================
-          FOOTER
-      ====================================================== */}
-
       <footer>
-
         Industrial PPE Monitoring System
-        • AI-powered workplace safety
-
+        {" • "}
+        AI-powered workplace safety
       </footer>
 
     </div>
@@ -1974,15 +2618,19 @@ function StatCard({
   value,
   description,
   icon,
-  danger,
-  success,
+  danger = false,
+  success = false,
 }) {
   return (
     <div
       className={`stat-card ${
-        danger ? "danger" : ""
+        danger
+          ? "danger"
+          : ""
       } ${
-        success ? "success" : ""
+        success
+          ? "success"
+          : ""
       }`}
     >
 
@@ -2003,6 +2651,63 @@ function StatCard({
         <small>
           {description}
         </small>
+
+      </div>
+
+    </div>
+  );
+}
+
+// ============================================================
+// STATUS CARD
+// ============================================================
+
+function StatusCard({
+  icon,
+  title,
+  value,
+  danger = false,
+}) {
+  return (
+    <div
+      className="ppe-card"
+      style={{
+        borderColor:
+          danger &&
+          value !== 0
+            ? "rgba(239,68,68,.25)"
+            : undefined,
+      }}
+    >
+
+      <div
+        className="ppe-card-icon"
+        style={{
+          background:
+            danger &&
+            value !== 0
+              ? "rgba(239,68,68,.12)"
+              : undefined,
+
+          color:
+            danger &&
+            value !== 0
+              ? "#f87171"
+              : undefined,
+        }}
+      >
+        {icon}
+      </div>
+
+      <div>
+
+        <span>
+          {title}
+        </span>
+
+        <strong>
+          {value}
+        </strong>
 
       </div>
 

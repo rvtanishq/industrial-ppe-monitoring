@@ -30,6 +30,7 @@ RECORDS_DIR = PROJECT_ROOT / "records"
 RECORDS_DIR.mkdir(exist_ok=True)
 
 DATABASE_FILE = RECORDS_DIR / "ppe_monitoring.db"
+
 EXCEL_FILE = RECORDS_DIR / "ppe_violation_records.xlsx"
 
 
@@ -39,7 +40,7 @@ EXCEL_FILE = RECORDS_DIR / "ppe_violation_records.xlsx"
 
 app = FastAPI(
     title="Industrial PPE Monitoring API",
-    version="6.0.0"
+    version="7.0.0"
 )
 
 app.add_middleware(
@@ -89,6 +90,7 @@ def initialize_database():
     )
 
     connection.commit()
+
     connection.close()
 
     print(
@@ -108,11 +110,13 @@ print("=" * 60)
 print("Loading YOLO model...")
 print("=" * 60)
 
+
 if not MODEL_PATH.exists():
 
     raise FileNotFoundError(
         f"YOLO model not found: {MODEL_PATH}"
     )
+
 
 model = YOLO(
     str(MODEL_PATH)
@@ -170,6 +174,7 @@ print(
 
 PERSON_CLASS = "Person"
 
+
 PPE_CLASSES = {
     "helmet",
     "gloves",
@@ -178,19 +183,41 @@ PPE_CLASSES = {
     "goggles"
 }
 
+
 VIOLATION_CLASSES = {
-    "no_helmet": "Helmet",
-    "no_goggle": "Safety Goggles",
-    "no_gloves": "Gloves",
-    "no_boots": "Safety Boots"
+
+    "no_helmet":
+        "Helmet",
+
+    "no_goggle":
+        "Safety Goggles",
+
+    "no_gloves":
+        "Gloves",
+
+    "no_boots":
+        "Safety Boots"
+
 }
 
+
 REQUIRED_PPE = {
-    "helmet": "Helmet",
-    "gloves": "Gloves",
-    "vest": "Safety Vest",
-    "boots": "Safety Boots",
-    "goggles": "Safety Goggles"
+
+    "helmet":
+        "Helmet",
+
+    "gloves":
+        "Gloves",
+
+    "vest":
+        "Safety Vest",
+
+    "boots":
+        "Safety Boots",
+
+    "goggles":
+        "Safety Goggles"
+
 }
 
 
@@ -199,14 +226,30 @@ REQUIRED_PPE = {
 # ============================================================
 
 system_state = {
-    "monitoring": False,
-    "alarm": False,
-    "workers": 0,
-    "compliant": 0,
-    "violating": 0,
-    "missing_ppe": 0,
-    "last_update": None
+
+    "monitoring":
+        False,
+
+    "alarm":
+        False,
+
+    "workers":
+        0,
+
+    "compliant":
+        0,
+
+    "violating":
+        0,
+
+    "missing_ppe":
+        0,
+
+    "last_update":
+        None
+
 }
+
 
 state_lock = threading.Lock()
 
@@ -221,7 +264,7 @@ VIOLATION_COOLDOWN = 5
 
 
 # ============================================================
-# FRAME PERFORMANCE CONTROL
+# FRAME PERFORMANCE
 # ============================================================
 
 processing_lock = threading.Lock()
@@ -235,58 +278,109 @@ MIN_PROCESS_INTERVAL = 0.08
 # IOU
 # ============================================================
 
-def calculate_iou(box_a, box_b):
+def calculate_iou(
+    box_a,
+    box_b
+):
 
     ax1, ay1, ax2, ay2 = box_a
 
     bx1, by1, bx2, by2 = box_b
 
-    intersection_x1 = max(ax1, bx1)
-    intersection_y1 = max(ay1, by1)
 
-    intersection_x2 = min(ax2, bx2)
-    intersection_y2 = min(ay2, by2)
+    intersection_x1 = max(
+        ax1,
+        bx1
+    )
+
+    intersection_y1 = max(
+        ay1,
+        by1
+    )
+
+    intersection_x2 = min(
+        ax2,
+        bx2
+    )
+
+    intersection_y2 = min(
+        ay2,
+        by2
+    )
+
 
     width = max(
         0,
-        intersection_x2 - intersection_x1
+        intersection_x2 -
+        intersection_x1
     )
 
     height = max(
         0,
-        intersection_y2 - intersection_y1
+        intersection_y2 -
+        intersection_y1
     )
+
 
     intersection_area = (
-        width * height
+        width *
+        height
     )
+
 
     area_a = (
-        max(0, ax2 - ax1)
+
+        max(
+            0,
+            ax2 - ax1
+        )
+
         *
-        max(0, ay2 - ay1)
+
+        max(
+            0,
+            ay2 - ay1
+        )
+
     )
+
 
     area_b = (
-        max(0, bx2 - bx1)
+
+        max(
+            0,
+            bx2 - bx1
+        )
+
         *
-        max(0, by2 - by1)
+
+        max(
+            0,
+            by2 - by1
+        )
+
     )
 
+
     union = (
+
         area_a
         +
         area_b
         -
         intersection_area
+
     )
+
 
     if union <= 0:
 
         return 0
 
+
     return (
-        intersection_area / union
+        intersection_area /
+        union
     )
 
 
@@ -299,8 +393,11 @@ def box_center(box):
     x1, y1, x2, y2 = box
 
     return (
+
         (x1 + x2) / 2,
+
         (y1 + y2) / 2
+
     )
 
 
@@ -308,16 +405,23 @@ def box_center(box):
 # POINT INSIDE BOX
 # ============================================================
 
-def point_inside_box(point, box):
+def point_inside_box(
+    point,
+    box
+):
 
     x, y = point
 
     x1, y1, x2, y2 = box
 
     return (
+
         x1 <= x <= x2
+
         and
+
         y1 <= y <= y2
+
     )
 
 
@@ -338,9 +442,13 @@ def assign_ppe_to_person(
 
     best_score = 0
 
+
     for person in persons:
 
-        person_box = person["box"]
+        person_box = (
+            person["box"]
+        )
+
 
         if point_inside_box(
             center,
@@ -356,11 +464,13 @@ def assign_ppe_to_person(
                 person_box
             )
 
+
         if score > best_score:
 
             best_score = score
 
             best_person = person
+
 
     return best_person
 
@@ -376,33 +486,44 @@ def save_violation_to_database(
 
     now = time.time()
 
+
     key = (
+
         person_id,
+
         tuple(
             sorted(
                 missing_ppe
             )
         )
+
     )
+
 
     previous = last_logged.get(
         key,
         0
     )
 
+
     if (
+
         now - previous
         <
         VIOLATION_COOLDOWN
+
     ):
 
         return
 
+
     last_logged[key] = now
+
 
     timestamp = datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
+
 
     missing_text = ", ".join(
         sorted(
@@ -410,15 +531,22 @@ def save_violation_to_database(
         )
     )
 
+
     try:
 
         with db_lock:
 
-            connection = get_db_connection()
+            connection = (
+                get_db_connection()
+            )
 
-            cursor = connection.cursor()
+            cursor = (
+                connection.cursor()
+            )
+
 
             cursor.execute(
+
                 """
                 INSERT INTO violations
                 (
@@ -429,29 +557,46 @@ def save_violation_to_database(
                 )
                 VALUES (?, ?, ?, ?)
                 """,
+
                 (
+
                     timestamp,
+
                     person_id,
+
                     missing_text,
+
                     "VIOLATION"
+
                 )
+
             )
+
 
             connection.commit()
 
             connection.close()
 
+
         print(
+
             "DATABASE VIOLATION LOGGED:",
+
             person_id,
+
             missing_text
+
         )
+
 
     except Exception as error:
 
         print(
+
             "Database logging error:",
+
             error
+
         )
 
 
@@ -461,36 +606,58 @@ def save_violation_to_database(
 
 def create_excel_file():
 
-    connection = get_db_connection()
+    connection = (
+        get_db_connection()
+    )
+
 
     query = """
+
         SELECT
+
             id AS ID,
+
             timestamp AS Timestamp,
+
             person_id AS "Person ID",
+
             missing_ppe AS "Missing PPE",
+
             status AS Status
+
         FROM violations
+
         ORDER BY id DESC
+
     """
 
+
     df = pd.read_sql_query(
+
         query,
+
         connection
+
     )
+
 
     connection.close()
 
+
     df.to_excel(
+
         EXCEL_FILE,
+
         index=False
+
     )
+
 
     return EXCEL_FILE
 
 
 # ============================================================
-# RESET STATE
+# RESET MONITORING STATE
 # ============================================================
 
 def reset_monitoring_state():
@@ -500,7 +667,9 @@ def reset_monitoring_state():
         alarm_manager.stop()
 
     except Exception:
+
         pass
+
 
     with state_lock:
 
@@ -508,25 +677,31 @@ def reset_monitoring_state():
             "monitoring"
         ] = False
 
+
         system_state[
             "alarm"
         ] = False
+
 
         system_state[
             "workers"
         ] = 0
 
+
         system_state[
             "compliant"
         ] = 0
+
 
         system_state[
             "violating"
         ] = 0
 
+
         system_state[
             "missing_ppe"
         ] = 0
+
 
         system_state[
             "last_update"
@@ -541,30 +716,44 @@ def process_frame(frame):
 
     global last_processed_time
 
+
     current_time = time.time()
+
 
     # --------------------------------------------------------
     # FRAME RATE LIMIT
     # --------------------------------------------------------
 
     if (
-        current_time
-        -
+
+        current_time -
         last_processed_time
+
         <
+
         MIN_PROCESS_INTERVAL
+
     ):
 
         return {
-            "success": False,
-            "skipped": True,
-            "image": None,
-            "violations": []
+
+            "success":
+                False,
+
+            "skipped":
+                True,
+
+            "image":
+                None,
+
+            "violations":
+                []
+
         }
 
 
     # --------------------------------------------------------
-    # DON'T RUN TWO YOLO INFERENCES AT ONCE
+    # PREVENT MULTIPLE YOLO INFERENCES
     # --------------------------------------------------------
 
     if not processing_lock.acquire(
@@ -572,27 +761,40 @@ def process_frame(frame):
     ):
 
         return {
-            "success": False,
-            "skipped": True,
-            "image": None,
-            "violations": []
+
+            "success":
+                False,
+
+            "skipped":
+                True,
+
+            "image":
+                None,
+
+            "violations":
+                []
+
         }
 
 
-    last_processed_time = current_time
+    last_processed_time = (
+        current_time
+    )
 
 
     try:
 
         # ====================================================
-        # RESIZE FOR PERFORMANCE
+        # RESIZE FRAME
         # ====================================================
 
         original_height, original_width = (
             frame.shape[:2]
         )
 
+
         MAX_WIDTH = 960
+
 
         if original_width > MAX_WIDTH:
 
@@ -601,19 +803,29 @@ def process_frame(frame):
                 original_width
             )
 
+
             new_width = MAX_WIDTH
 
+
             new_height = int(
-                original_height * scale
+
+                original_height *
+                scale
+
             )
 
+
             frame = cv2.resize(
+
                 frame,
+
                 (
                     new_width,
                     new_height
                 ),
+
                 interpolation=cv2.INTER_AREA
+
             )
 
 
@@ -639,7 +851,9 @@ def process_frame(frame):
 
         )
 
+
         result = results[0]
+
 
         persons = []
 
@@ -654,6 +868,7 @@ def process_frame(frame):
 
             boxes = result.boxes
 
+
             for index in range(
                 len(boxes)
             ):
@@ -662,28 +877,41 @@ def process_frame(frame):
                     boxes.cls[index]
                 )
 
+
                 class_name = (
                     model.names[
                         class_id
                     ]
                 )
 
+
                 xyxy = (
+
                     boxes.xyxy[index]
+
                     .cpu()
+
                     .numpy()
+
                 )
+
 
                 x1, y1, x2, y2 = map(
+
                     int,
+
                     xyxy
+
                 )
 
+
                 detection_box = [
+
                     x1,
                     y1,
                     x2,
                     y2
+
                 ]
 
 
@@ -692,27 +920,40 @@ def process_frame(frame):
                 # ==========================================
 
                 if (
+
                     class_name
                     ==
                     PERSON_CLASS
+
                 ):
 
                     track_id = None
 
+
                     if (
+
                         boxes.id
                         is not None
+
                     ):
 
                         track_id = int(
+
                             boxes.id[index]
+
                         )
+
 
                     if track_id is None:
 
                         track_id = (
-                            len(persons) + 1
+
+                            len(persons)
+                            +
+                            1
+
                         )
+
 
                     persons.append({
 
@@ -736,9 +977,11 @@ def process_frame(frame):
                 # ==========================================
 
                 elif (
+
                     class_name
                     in
                     PPE_CLASSES
+
                 ):
 
                     ppe_detections.append({
@@ -757,9 +1000,11 @@ def process_frame(frame):
                 # ==========================================
 
                 elif (
+
                     class_name
                     in
                     VIOLATION_CLASSES
+
                 ):
 
                     ppe_detections.append({
@@ -787,30 +1032,40 @@ def process_frame(frame):
 
             )
 
+
             if person is None:
 
                 continue
+
 
             class_name = (
                 detection["class"]
             )
 
+
             if (
+
                 class_name
                 in
                 PPE_CLASSES
+
             ):
 
                 person[
                     "ppe"
                 ].add(
+
                     class_name
+
                 )
 
+
             elif (
+
                 class_name
                 in
                 VIOLATION_CLASSES
+
             ):
 
                 person[
@@ -838,7 +1093,7 @@ def process_frame(frame):
 
 
         # ====================================================
-        # DRAW PERSONS AND PPE
+        # DRAW PERSONS
         # ====================================================
 
         for person in persons:
@@ -847,9 +1102,11 @@ def process_frame(frame):
                 person["id"]
             )
 
+
             detected_ppe = (
                 person["ppe"]
             )
+
 
             explicit_violations = (
                 person["violations"]
@@ -864,21 +1121,28 @@ def process_frame(frame):
 
 
             for (
+
                 item,
+
                 display_name
+
             ) in REQUIRED_PPE.items():
 
+
                 # Vest is not considered mandatory
-                # because your model has no no_vest class.
+                # because there is no no_vest class.
 
                 if item == "vest":
 
                     continue
 
+
                 if (
+
                     item
                     not in
                     detected_ppe
+
                 ):
 
                     missing_ppe.add(
@@ -886,15 +1150,21 @@ def process_frame(frame):
                     )
 
 
-            # Add explicit no_* detections
+            # ------------------------------------------------
+            # ADD EXPLICIT VIOLATIONS
+            # ------------------------------------------------
 
             missing_ppe.update(
+
                 explicit_violations
+
             )
 
 
             is_violation = (
+
                 len(missing_ppe) > 0
+
             )
 
 
@@ -903,27 +1173,34 @@ def process_frame(frame):
             )
 
 
-            # ------------------------------------------------
+            # =================================================
             # VIOLATION
-            # ------------------------------------------------
+            # =================================================
 
             if is_violation:
 
                 violating_people += 1
 
+
                 total_missing += len(
                     missing_ppe
                 )
 
+
                 color = (
+
                     0,
                     0,
                     255
+
                 )
 
+
                 status_text = (
+
                     f"ID {person_id} "
                     f"VIOLATION"
+
                 )
 
 
@@ -949,23 +1226,29 @@ def process_frame(frame):
                 )
 
 
-            # ------------------------------------------------
+            # =================================================
             # COMPLIANT
-            # ------------------------------------------------
+            # =================================================
 
             else:
 
                 compliant_people += 1
 
+
                 color = (
+
                     0,
                     255,
                     0
+
                 )
 
+
                 status_text = (
+
                     f"ID {person_id} "
                     f"COMPLIANT"
+
                 )
 
 
@@ -1024,7 +1307,7 @@ def process_frame(frame):
 
 
             # =================================================
-            # MISSING PPE TEXT
+            # MISSING PPE
             # =================================================
 
             if is_violation:
@@ -1032,6 +1315,7 @@ def process_frame(frame):
                 text_y = (
                     y1 + 25
                 )
+
 
                 for missing in sorted(
                     missing_ppe
@@ -1058,14 +1342,12 @@ def process_frame(frame):
 
                     )
 
+
                     text_y += 22
 
 
         # ====================================================
-        # DRAW ALL RAW PPE DETECTIONS
-        #
-        # This makes helmet/gloves/boots/goggles boxes visible
-        # directly on the camera.
+        # DRAW RAW PPE DETECTIONS
         # ====================================================
 
         for detection in ppe_detections:
@@ -1074,39 +1356,56 @@ def process_frame(frame):
                 detection["box"]
             )
 
+
             class_name = (
                 detection["class"]
             )
 
+
             if (
+
                 class_name
                 in
                 VIOLATION_CLASSES
+
             ):
 
                 box_color = (
+
                     0,
                     0,
                     255
+
                 )
 
+
                 label = (
+
                     VIOLATION_CLASSES[
                         class_name
                     ]
+
                     +
+
                     " MISSING"
+
                 )
+
 
             else:
 
                 box_color = (
+
                     255,
                     200,
                     0
+
                 )
 
-                label = class_name.upper()
+
+                label = (
+                    class_name.upper()
+                )
 
 
             cv2.rectangle(
@@ -1160,9 +1459,15 @@ def process_frame(frame):
         # ====================================================
 
         violation_exists = (
+
             violating_people > 0
+
         )
 
+
+        # ====================================================
+        # UPDATE SYSTEM STATE
+        # ====================================================
 
         with state_lock:
 
@@ -1170,21 +1475,26 @@ def process_frame(frame):
                 "workers"
             ] = len(persons)
 
+
             system_state[
                 "compliant"
             ] = compliant_people
+
 
             system_state[
                 "violating"
             ] = violating_people
 
+
             system_state[
                 "missing_ppe"
             ] = total_missing
 
+
             system_state[
                 "alarm"
             ] = violation_exists
+
 
             system_state[
                 "last_update"
@@ -1243,6 +1553,7 @@ def process_frame(frame):
 
             )
 
+
             cv2.putText(
 
                 frame,
@@ -1294,6 +1605,7 @@ def process_frame(frame):
 
             )
 
+
             cv2.putText(
 
                 frame,
@@ -1331,8 +1643,11 @@ def process_frame(frame):
             frame,
 
             [
+
                 cv2.IMWRITE_JPEG_QUALITY,
+
                 65
+
             ]
 
         )
@@ -1358,11 +1673,13 @@ def process_frame(frame):
 
 
         frame_base64 = (
+
             base64.b64encode(
                 buffer
             ).decode(
                 "utf-8"
             )
+
         )
 
 
@@ -1386,9 +1703,13 @@ def process_frame(frame):
     except Exception as error:
 
         print(
+
             "Frame processing error:",
+
             error
+
         )
+
 
         return {
 
@@ -1430,6 +1751,7 @@ def start_monitoring():
             "monitoring"
         ] = True
 
+
     return {
 
         "success":
@@ -1454,6 +1776,7 @@ def start_monitoring():
 def stop_monitoring():
 
     reset_monitoring_state()
+
 
     return {
 
@@ -1544,7 +1867,8 @@ async def stop_alarm():
         "success":
             True,
 
-        "alarm":
+        "alarm"
+            :
             False
 
     }
@@ -1568,12 +1892,23 @@ def get_status():
 
 # ============================================================
 # DASHBOARD
+#
+# IMPORTANT:
+# This endpoint now returns:
+#
+# history.violation_distribution
+#
+# so the React frontend can build the live chart.
 # ============================================================
 
 @app.get(
     "/api/dashboard"
 )
 def dashboard():
+
+    # --------------------------------------------------------
+    # LIVE DATA
+    # --------------------------------------------------------
 
     with state_lock:
 
@@ -1582,39 +1917,206 @@ def dashboard():
         )
 
 
-    connection = get_db_connection()
+    # --------------------------------------------------------
+    # DATABASE
+    # --------------------------------------------------------
 
-    cursor = connection.cursor()
+    connection = (
+        get_db_connection()
+    )
 
+    cursor = (
+        connection.cursor()
+    )
+
+
+    # --------------------------------------------------------
+    # TOTAL VIOLATIONS
+    # --------------------------------------------------------
 
     cursor.execute(
+
         """
         SELECT COUNT(*)
         FROM violations
         """
+
     )
+
 
     total_violations = (
         cursor.fetchone()[0]
     )
 
 
+    # --------------------------------------------------------
+    # WORKERS INVOLVED
+    # --------------------------------------------------------
+
     cursor.execute(
+
         """
         SELECT COUNT(
             DISTINCT person_id
         )
         FROM violations
         """
+
     )
+
 
     workers_involved = (
         cursor.fetchone()[0]
     )
 
 
+    # --------------------------------------------------------
+    # VIOLATION DISTRIBUTION
+    # --------------------------------------------------------
+
+    cursor.execute(
+
+        """
+        SELECT missing_ppe
+        FROM violations
+        ORDER BY id ASC
+        """
+
+    )
+
+
+    rows = cursor.fetchall()
+
+
+    # Always return all categories.
+    # This prevents the frontend chart from disappearing
+    # when one category currently has zero violations.
+
+    violation_distribution = {
+
+        "Helmet":
+            0,
+
+        "Gloves":
+            0,
+
+        "Safety Vest":
+            0,
+
+        "Safety Boots":
+            0,
+
+        "Safety Goggles":
+            0
+
+    }
+
+
+    # --------------------------------------------------------
+    # COUNT EACH PPE VIOLATION
+    # --------------------------------------------------------
+
+    for row in rows:
+
+        missing_ppe = (
+            row["missing_ppe"]
+        )
+
+
+        if not missing_ppe:
+
+            continue
+
+
+        items = [
+
+            item.strip()
+
+            for item in
+            missing_ppe.split(",")
+
+            if item.strip()
+
+        ]
+
+
+        for item in items:
+
+            if item in violation_distribution:
+
+                violation_distribution[item] += 1
+
+
     connection.close()
 
+
+    # --------------------------------------------------------
+    # CONVERT DISTRIBUTION TO CHART-FRIENDLY FORMAT TOO
+    # --------------------------------------------------------
+
+    violation_distribution_list = [
+
+        {
+            "name":
+                "Helmet",
+
+            "value":
+                violation_distribution[
+                    "Helmet"
+                ]
+
+        },
+
+        {
+            "name":
+                "Gloves",
+
+            "value":
+                violation_distribution[
+                    "Gloves"
+                ]
+
+        },
+
+        {
+            "name":
+                "Safety Vest",
+
+            "value":
+                violation_distribution[
+                    "Safety Vest"
+                ]
+
+        },
+
+        {
+            "name":
+                "Safety Boots",
+
+            "value":
+                violation_distribution[
+                    "Safety Boots"
+                ]
+
+        },
+
+        {
+            "name":
+                "Safety Goggles",
+
+            "value":
+                violation_distribution[
+                    "Safety Goggles"
+                ]
+
+        }
+
+    ]
+
+
+    # --------------------------------------------------------
+    # RETURN
+    # --------------------------------------------------------
 
     return {
 
@@ -1627,7 +2129,13 @@ def dashboard():
                 total_violations,
 
             "workers_involved":
-                workers_involved
+                workers_involved,
+
+            "violation_distribution":
+                violation_distribution,
+
+            "violation_distribution_list":
+                violation_distribution_list
 
         },
 
@@ -1646,12 +2154,17 @@ def dashboard():
 )
 def get_violations():
 
-    connection = get_db_connection()
+    connection = (
+        get_db_connection()
+    )
 
-    cursor = connection.cursor()
+    cursor = (
+        connection.cursor()
+    )
 
 
     cursor.execute(
+
         """
         SELECT
             id,
@@ -1659,13 +2172,17 @@ def get_violations():
             person_id,
             missing_ppe,
             status
+
         FROM violations
+
         ORDER BY id DESC
         """
+
     )
 
 
     rows = cursor.fetchall()
+
 
     connection.close()
 
@@ -1721,6 +2238,7 @@ def download_excel():
             create_excel_file()
         )
 
+
         return StreamingResponse(
 
             open(
@@ -1729,18 +2247,23 @@ def download_excel():
             ),
 
             media_type=(
+
                 "application/vnd.openxmlformats-officedocument."
                 "spreadsheetml.sheet"
+
             ),
 
             headers={
 
                 "Content-Disposition":
-                    'attachment; filename="ppe_violation_records.xlsx"'
+
+                    'attachment; '
+                    'filename="ppe_violation_records.xlsx"'
 
             }
 
         )
+
 
     except Exception as error:
 
@@ -1768,6 +2291,7 @@ async def camera_websocket(
 
     await websocket.accept()
 
+
     print(
         "Browser camera connected."
     )
@@ -1778,7 +2302,9 @@ async def camera_websocket(
         while True:
 
             message = (
+
                 await websocket.receive_json()
+
             )
 
 
@@ -1787,9 +2313,11 @@ async def camera_websocket(
             # =================================================
 
             if (
+
                 message.get("type")
                 ==
                 "start"
+
             ):
 
                 with state_lock:
@@ -1811,6 +2339,7 @@ async def camera_websocket(
 
                 })
 
+
                 continue
 
 
@@ -1819,9 +2348,11 @@ async def camera_websocket(
             # =================================================
 
             if (
+
                 message.get("type")
                 ==
                 "stop"
+
             ):
 
                 reset_monitoring_state()
@@ -1839,6 +2370,7 @@ async def camera_websocket(
 
                 })
 
+
                 continue
 
 
@@ -1847,24 +2379,28 @@ async def camera_websocket(
             # =================================================
 
             if (
+
                 message.get("type")
                 !=
                 "frame"
+
             ):
 
                 continue
 
 
             # -------------------------------------------------
-            # CHECK MONITORING STATE
+            # CHECK MONITORING
             # -------------------------------------------------
 
             with state_lock:
 
                 monitoring = (
+
                     system_state[
                         "monitoring"
                     ]
+
                 )
 
 
@@ -1874,7 +2410,9 @@ async def camera_websocket(
 
 
             image_data = (
+
                 message.get("image")
+
             )
 
 
@@ -1890,10 +2428,12 @@ async def camera_websocket(
             if "," in image_data:
 
                 image_data = (
+
                     image_data.split(
                         ",",
                         1
                     )[1]
+
                 )
 
 
@@ -1904,19 +2444,26 @@ async def camera_websocket(
             try:
 
                 image_bytes = (
+
                     base64.b64decode(
                         image_data
                     )
+
                 )
 
 
                 numpy_array = (
+
                     __import__(
                         "numpy"
                     ).frombuffer(
+
                         image_bytes,
+
                         dtype="uint8"
+
                     )
+
                 )
 
 
@@ -1937,8 +2484,11 @@ async def camera_websocket(
             except Exception as error:
 
                 print(
+
                     "Frame decoding error:",
+
                     error
+
                 )
 
                 continue
@@ -1958,10 +2508,12 @@ async def camera_websocket(
             # =================================================
 
             if (
+
                 result.get(
                     "skipped"
                 )
                 is True
+
             ):
 
                 continue
@@ -2040,7 +2592,7 @@ def root():
             "Industrial PPE Monitoring API",
 
         "version":
-            "6.0.0",
+            "7.0.0",
 
         "status":
             "running",
@@ -2074,12 +2626,17 @@ def health():
         "database":
             "connected",
 
-        "device":
-            (
-                "GPU"
-                if YOLO_DEVICE == 0
-                else "CPU"
-            ),
+        "device": (
+
+            "GPU"
+
+            if YOLO_DEVICE == 0
+
+            else
+
+            "CPU"
+
+        ),
 
         "timestamp":
             datetime.now().isoformat()
@@ -2127,21 +2684,26 @@ def shutdown():
             "monitoring"
         ] = False
 
+
         system_state[
             "alarm"
         ] = False
+
 
         system_state[
             "workers"
         ] = 0
 
+
         system_state[
             "compliant"
         ] = 0
 
+
         system_state[
             "violating"
         ] = 0
+
 
         system_state[
             "missing_ppe"
